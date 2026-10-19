@@ -1,0 +1,38 @@
+name: Deploy AWS RDS
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  apply:
+    if: vars.ENABLE_CLOUD_DEPLOY == 'true'
+    runs-on: ubuntu-latest
+    environment: cloud
+    concurrency: aws-oficina-database
+    env:
+      TF_VAR_vpc_id: ${{ vars.VPC_ID }}
+      TF_VAR_private_subnet_ids: ${{ vars.PRIVATE_SUBNET_IDS_JSON }}
+      TF_VAR_eks_security_group_id: ${{ vars.EKS_SECURITY_GROUP_ID }}
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Exigir entradas
+        run: |
+          for name in TF_VAR_vpc_id TF_VAR_private_subnet_ids TF_VAR_eks_security_group_id TF_VAR_db_password TF_STATE_BUCKET; do
+            test -n "${!name}" || { echo "$name ausente"; exit 1; }
+          done
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-1
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+      - name: Plan e apply
+        working-directory: aws
+        run: |
+          aws sts get-caller-identity --query Arn --output text >/dev/null
+          terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=oficina/database.tfstate" -backend-config="region=us-east-1" -backend-config="use_lockfile=true"
+          terraform plan -input=false -out=deploy.tfplan
+          terraform apply -input=false -auto-approve deploy.tfplan
